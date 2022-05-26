@@ -2,8 +2,33 @@ import mysql.connector
 import pandas as pd
 import pymongo
 from sqlalchemy import create_engine
+from dotenv import load_dotenv, find_dotenv
+import os
 
-from etl.functions import load_env_secrets
+
+def load_env_secrets(dotenv_path, dbtype='mysql'):
+    """Loads env variables from a .env file located in the project root
+    directory.
+    """
+    load_dotenv(find_dotenv(dotenv_path))
+    if dbtype == 'mysql':
+        db_settings = {
+            'user': os.getenv('DB_USER'),
+            'password': os.getenv('DB_PASSWORD'),
+            'host': os.getenv('DB_HOST'),
+            'port': os.getenv('DB_PORT'),
+            'dbname': os.getenv('DB_NAME')
+
+        }
+    elif dbtype == 'mongo':
+        db_settings = {
+            'user': os.getenv('MONGO_DB_USER'),
+            'password': os.getenv('MONGO_DB_PASSWORD'),
+            'host': os.getenv('MONGO_DB_HOST'),
+            'port': int(os.getenv('MONGO_DB_PORT')),
+            'dbname': os.getenv('MONGO_DB_NAME')
+        }
+    return db_settings
 
 
 class DBConnection:
@@ -11,7 +36,7 @@ class DBConnection:
     Class to interact with the database
     """
 
-    def __init__(self, create_db=False, create_engine=False, dbtype='mysql'):
+    def __init__(self, create_db=False, create_engine=True, dbtype='mysql'):
         self.dbtype = dbtype
         self.set_db_parameters()
         self.conn = self.set_connection()
@@ -19,7 +44,7 @@ class DBConnection:
             self.create_database()
         if dbtype == 'mysql':
             if create_engine:
-                self.create_engine()
+                self.engine = self.create_engine()
         print(self.conn)
 
     def set_connection(self):
@@ -33,7 +58,7 @@ class DBConnection:
                 password=self.password,
                 port=self.port,
                 database=self.db
-                )
+            )
             return conn
         elif self.dbtype == 'sqlite':
             pass
@@ -75,14 +100,15 @@ class DBConnection:
         """
         Creates a SQLAlchemy engine to interact with the database. Needed to use pandas dataframe
         """
-        self.engine = create_engine('mysql+mysqlconnector://{user}:{password}@{host}:{port}/{db}'.format(
+        engine = create_engine('mysql+mysqlconnector://{user}:{password}@{host}:{port}/{db}'.format(
             user=self.user,
             password=self.password,
             host=self.host,
             port=self.port,
             db=self.db
-            )
         )
+        )
+        return engine
 
     def execute_query(self, query):
         """
@@ -99,17 +125,23 @@ class DBConnection:
         """
         if self.dbtype == 'mysql':
             df = pd.read_sql(query, self.engine)
+            return df
         elif self.dbtype == 'mongo':
             df = pd.DataFrame(list(self.mongodb.find(query)))
-        return df
-    
+            return df
+        else:
+            raise NotImplementedError
+
     def drop_table(self, table_name):
         """
         Drops a table from the database
         """
-        with self.conn.cursor() as cursor:
-            cursor.execute("DROP TABLE IF EXISTS {}".format(table_name))
-            self.conn.commit()
+        if self.dbtype == 'mysql':
+            with self.conn.cursor() as cursor:
+                cursor.execute("DROP TABLE IF EXISTS {}".format(table_name))
+                self.conn.commit()
+        if self.dbtype == 'mongo':
+            self.mongodb.drop_collection(table_name)
 
     def create_table_from_df(self, table_name, df):
         """
@@ -119,29 +151,36 @@ class DBConnection:
             df.to_sql(table_name, self.engine, if_exists='append')
         elif self.dbtype == 'mongo':
             self.conn[self.db][table_name].insert_many(df.to_dict('records'))
-        
+        else:
+            raise NotImplementedError
 
-    def read_table_to_df(self, table_name, no_id = True):
+    def read_table_to_df(self, table_name, no_id=True):
         """
         Reads a table from the database into a dataframe and returns it
         """
         if self.dbtype == 'mysql':
             df = pd.read_sql(table_name, self.engine)
+            return df
         elif self.dbtype == 'mongo':
             cursor = self.mongodb[table_name].find()
-            df =  pd.DataFrame(list(cursor))
+            df = pd.DataFrame(list(cursor))
             # Delete the _id
             if no_id:
                 del df['_id']
-        return df
+            return df
+        else:
+            raise NotImplementedError
 
     @staticmethod
     def get_monthly_sum_df(df, country: str, year: int):
         """
         Filter df so the query is independent of the db used.
         """
-        filtered = df[(df['Country'] == country) & (df['InvoiceDate'].dt.year == year)].copy()
+        filtered = df[(df['Country'] == country) & (df['InvoiceDate'].dt.year == year)].sort_values(
+            by='InvoiceDate').copy()
         # Set the index to the InvoiceDate column
         filtered['InvoiceDate'] = pd.to_datetime(filtered['InvoiceDate'])
         filtered = filtered.resample('M', on='InvoiceDate').sum()['UnitPrice']
+        # Change date colum to get the month and the year as a date string
+        filtered.index = filtered.index.strftime('%Y-%m')
         return filtered

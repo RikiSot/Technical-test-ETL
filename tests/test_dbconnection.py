@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 from etl.dbconnection import DBConnection
-from etl.functions import load_df_from_csv
+from etl.functions import load_df_from_csv, pipeline
 
 
 class TestDBConnection(unittest.TestCase):
@@ -11,6 +11,9 @@ class TestDBConnection(unittest.TestCase):
         self.mongodb = DBConnection(create_db=True, create_engine=True, dbtype='mongo')
 
     def test_mysqldb(self):
+        """
+        Test the pipeline if SQL syntax is used
+        """
         csv_path = Path('etl/data/online retail.csv')
         df = load_df_from_csv(csv_path)
         self.mysqldb.create_table_from_df('online_retail', df)
@@ -38,3 +41,18 @@ class TestDBConnection(unittest.TestCase):
         print(df_mongo_filtered)
         # No errors
         self.assertTrue(True)
+
+    def test_pipeline(self):
+        """
+        Test the pipeline function for the general case
+        """
+        # Mongo DB
+        df_filtered = pipeline('mongo', 'data/online retail.csv')
+        print(df_filtered)
+        # MySQL DB
+        df_filtered = pipeline('mysql', 'data/online retail.csv')
+        print(df_filtered)
+        # Check that the dataframes are the same
+        self.assertEqual(df_filtered.equals(df_filtered), True)
+
+
